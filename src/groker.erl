@@ -80,7 +80,7 @@ match(_Msg, []) ->
 
 match(Msg, [{Name, RE}|T]) ->
     io:format("match - H: ~p~n", [RE]),
-    case re:run(Msg, RE) of
+    case re:run(Msg, RE, [global, {capture, all_names, list}]) of
         {match, Captured} ->
             {Name, Captured};
         nomatch ->
