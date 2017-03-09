@@ -11,7 +11,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% Tests
--export([start_rate_test/0]).
+-export([test1/0, test2/0]).
 
 -record(state, {patterns, start_time, count}).
 
@@ -21,7 +21,7 @@
 -define(BACKSLASH, $\\).
 -define(PATTERN_DIR, "./config/patterns/").
 -define(PATTERN_FILE, "./config/syslog_patterns").
--define(LIMIT, 1000).
+-define(LIMIT, 100000).
 
 %%====================================================================
 %% API and Callbacks
@@ -74,7 +74,8 @@ handle_cast({grok, Msg}, #state{patterns = Patterns, start_time = StartTime, cou
             {message_queue_len, BoxLen} = process_info(self(), message_queue_len),
             Seconds = timer:now_diff(erlang:timestamp(), StartTime) / 1000000,
             Rate = ?LIMIT / Seconds,
-            io:format("~p > current rate: ~p, message box length: ~p~n", [erlang:timestamp(), Rate, BoxLen]),
+            io:format("rate: ~p, box len: :~p~n", [Rate, BoxLen]),
+            %io:format("~p~n", [Rate]),
             {noreply, State#state{start_time = erlang:timestamp(), count = 0}}; 
         false ->
             {noreply, State#state{count = NewCount}}
@@ -267,19 +268,34 @@ process_line(Line) ->
 %%====================================================================
 %% Tests
 
-start_rate_test() ->
+test1() ->
     Pid = get_pid(),
-    rate_test(Pid).
+    test1(Pid).
 
-rate_test(Pid) ->
+test1(Pid) ->
     {message_queue_len, BoxLen} = process_info(Pid, message_queue_len),
 
-    case BoxLen > 1000000 of
+    case BoxLen > 2000000 of
         true ->
             io:format("!~n"),
-            rate_test(Pid);
+            test1(Pid);
         false ->
             grok("gary is male, 25 years old and weighs 68.5 kilograms"),
-            rate_test(Pid)
+            test1(Pid)
     end.
 
+test2() ->
+    test2(0).
+
+test2(Cnt) ->
+    %% Test 2 ma horsi vysleky nez test 1. Zda se, ze je pro celkovy vykon lepsi
+    %% kontinualne plnit mailbox nez ho precpat na zacatku a nechat byt
+    grok("gary is male, 25 years old and weighs 68.5 kilograms"),
+    case Cnt > 300000 of
+        true ->
+            io:format("Fin~n", []);
+        false ->
+            test2(Cnt + 1)
+    end.
+
+ 
