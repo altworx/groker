@@ -2,17 +2,95 @@
 
 %-export([init/0, match/1]).
 
--compile(export_all).
+-behaviour(gen_server).
 
+%% API
+-export([start_link/0, grok/1]).
+
+%% Gen_server_callbacks
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
+
+-record(state, {patterns}).
+
+-define(SERVER, ?MODULE).
 -define(SPACE, 16#20).
 -define(HASH, $#).
 -define(BACKSLASH, $\\).
--define(PATTERN_DIR, "/usr/local/lib/python2.7/site-packages/pygrok/patterns/").
+-define(PATTERN_DIR, "./config/patterns/").
+-define(PATTERN_FILE, "./config/syslog_patterns").
+
+%%====================================================================
+%% API and Callbacks
 
 %%--------------------------------------------------------------------
-init(Pattern) ->
-    Patterns = load_patterns_from_dir(?PATTERN_DIR),
-    expand_pattern(Pattern, Patterns).
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+%%--------------------------------------------------------------------
+grok(Msg) -> 
+    io:format("grok message ~p~n", [Msg]),
+    gen_server:cast(?SERVER, {grok, Msg}).
+
+%%--------------------------------------------------------------------
+init(_) ->
+    % U expanze vyrazu se pouziva hledani dle klicu, vhodna struktura je mapa
+    CorePatterns = load_patterns_from_dir(?PATTERN_DIR),
+    AppPatterns = load_patterns_from_file(?PATTERN_FILE),
+    ExpPatterns = maps:map(fun(_Key, Val) -> expand_pattern(Val, CorePatterns) end, AppPatterns),
+
+    % Pro zpracovani zprav se ale nehleda dle klicu ale iteruje se po vzorech, vhodnejsi je seznam
+    CompPatterns = maps:to_list(maps:map(fun(_Key, Val) -> compile_pattern(Val) end, ExpPatterns)),
+    io:format("CompPatterns: ~p~n", [CompPatterns]),
+    {ok, #state{patterns = CompPatterns}}.
+
+%%--------------------------------------------------------------------
+code_change(_OlvVsn, State, _Extra) ->
+    {ok, State}.
+
+%%--------------------------------------------------------------------
+handle_call(_Request, _From, State) ->
+    Reply = [],
+    {reply, Reply, State}.
+
+%%--------------------------------------------------------------------
+handle_cast({grok, Msg}, #state{patterns = Patterns} = State) ->
+    io:format("handle_cast: ~p~n", [Msg]),
+    Data = match(Msg, Patterns),
+    io:format("Data: ~p~n", [Data]),
+    {noreply, State}; 
+
+handle_cast(Request, State) ->
+    io:format("handle_cast - unknown request: ~p~n", [Request]),
+    {noreply, State}.
+
+%%--------------------------------------------------------------------
+handle_info(_Info, State) ->
+    {noreply, State}.
+
+%%--------------------------------------------------------------------
+terminate(_Reason, _State) ->
+    ok.
+
+%%====================================================================
+%% Private functions
+
+%---------------------------------------------------------------------
+match(_Msg, []) ->
+    nomatch;
+
+match(Msg, [{Name, RE}|T]) ->
+    io:format("match - H: ~p~n", [RE]),
+    case re:run(Msg, RE) of
+        {match, Captured} ->
+            {Name, Captured};
+        nomatch ->
+            match(Msg, T)
+    end.
+
+%%--------------------------------------------------------------------
+compile_pattern(P) ->
+    {ok, MP} = re:compile(P),
+    MP.
 
 %%--------------------------------------------------------------------
 expand_pattern(Pattern, Patterns) ->
@@ -26,10 +104,10 @@ expand_pattern(Pattern, Patterns, DataTypes) ->
                        DataTypes
                end,
 
-    io:format("Entering high level expansion with ~p~n", [Pattern]),
+    %io:format("Entering high level expansion with ~p~n", [Pattern]),
     Pattern1 = expand_high_level(Pattern, Patterns),
 
-    io:format("Entering low level expansion with: ~p~n", [Pattern1]),
+    %io:format("Entering low level expansion with: ~p~n", [Pattern1]),
     Pattern2 = expand_low_level(Pattern1, Patterns),
 
     case re:run(Pattern2, "%{\\w+(:\\w+)?}", [ungreedy]) of 
@@ -47,9 +125,9 @@ expand_high_level(Pattern, Patterns) ->
         {match, [String, Type, Name|_]} ->
             Replacement = maps:get(Type, Patterns),
             Replacement1 = escape("(?P<" ++ Name ++ ">" ++ Replacement ++ ")"),
-            io:format("~p -> ~p~n", [Type, Replacement1]),
+            %io:format("~p -> ~p~n", [Type, Replacement1]),
             NewPattern = re:replace(Pattern, String, Replacement1, [ungreedy, {return, list}]),
-            io:format("~p~n", [NewPattern]),
+            %io:format("~p~n", [NewPattern]),
             expand_high_level(NewPattern, Patterns)
     end.
 
@@ -61,9 +139,9 @@ expand_low_level(Pattern, Patterns) ->
         {match, [String, Type|_]} ->
             Replacement = maps:get(Type, Patterns),
             Replacement1 = escape(Replacement),
-            io:format("~p -> ~p~n", [Type, Replacement1]),
+            %io:format("~p -> ~p~n", [Type, Replacement1]),
             NewPattern = re:replace(Pattern, String, Replacement1, [ungreedy, {return, list}]),
-            io:format("~p~n", [NewPattern]),
+            %io:format("~p~n", [NewPattern]),
             expand_low_level(NewPattern, Patterns)
     end.
 

@@ -1,0 +1,2 @@
+PATTERN1 %{WORD:name} is %{WORD:gender}, %{NUMBER:age:int} years old and weighs %{NUMBER:weight:float} kilograms
+

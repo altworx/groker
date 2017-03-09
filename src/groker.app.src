@@ -1,0 +1,19 @@
+{application, groker,
+ [{description, "grok like pattern matching"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {groker_app, []}},
+  {applications,
+   [kernel,
+    stdlib
+   ]},
+  {env,[
+    {pattern_dir, "./config/core_patterns"},
+    {pattern_file, "./config/patterns"}
+  ]},
+  {modulies, []},
+
+  {maintainers, []},
+  {licenses, []},
+  {links, []}
+ ]}.
