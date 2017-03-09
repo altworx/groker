@@ -5,13 +5,13 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, grok/1]).
+-export([start_link/0, grok/1, get_pid/0]).
 
 %% Gen_server_callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% Tests
--export([rate_test/0]).
+-export([start_rate_test/0]).
 
 -record(state, {patterns, start_time, count}).
 
@@ -35,6 +35,9 @@ grok(Msg) ->
     %io:format("grok message ~p~n", [Msg]),
     gen_server:cast(?SERVER, {grok, Msg}).
 
+get_pid() ->
+    gen_server:call(?SERVER, getpid).
+
 %%--------------------------------------------------------------------
 init(_) ->
     % U expanze vyrazu se pouziva hledani dle klicu, vhodna struktura je mapa
@@ -52,8 +55,11 @@ code_change(_OlvVsn, State, _Extra) ->
     {ok, State}.
 
 %%--------------------------------------------------------------------
+handle_call(getpid, _From, State) ->
+    {reply, self(), State};
+
 handle_call(_Request, _From, State) ->
-    Reply = [],
+    Reply = unknown_request,
     {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
@@ -65,9 +71,10 @@ handle_cast({grok, Msg}, #state{patterns = Patterns, start_time = StartTime, cou
     NewCount = Count + 1, 
     case NewCount =:= ?LIMIT of
         true ->
+            {message_queue_len, BoxLen} = process_info(self(), message_queue_len),
             Seconds = timer:now_diff(erlang:timestamp(), StartTime) / 1000000,
             Rate = ?LIMIT / Seconds,
-            io:format("~p > current rate: ~p~n", [erlang:timestamp(), Rate]),
+            io:format("~p > current rate: ~p, message box length: ~p~n", [erlang:timestamp(), Rate, BoxLen]),
             {noreply, State#state{start_time = erlang:timestamp(), count = 0}}; 
         false ->
             {noreply, State#state{count = NewCount}}
@@ -260,6 +267,19 @@ process_line(Line) ->
 %%====================================================================
 %% Tests
 
-rate_test() ->
-    grok("gary is male, 25 years old and weighs 68.5 kilograms"),
-    rate_test().
+start_rate_test() ->
+    Pid = get_pid(),
+    rate_test(Pid).
+
+rate_test(Pid) ->
+    {message_queue_len, BoxLen} = process_info(Pid, message_queue_len),
+
+    case BoxLen > 1000000 of
+        true ->
+            io:format("!~n"),
+            rate_test(Pid);
+        false ->
+            grok("gary is male, 25 years old and weighs 68.5 kilograms"),
+            rate_test(Pid)
+    end.
+
