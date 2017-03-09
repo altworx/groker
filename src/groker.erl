@@ -10,7 +10,10 @@
 %% Gen_server_callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--record(state, {patterns}).
+%% Tests
+-export([rate_test/0]).
+
+-record(state, {patterns, start_time, count}).
 
 -define(SERVER, ?MODULE).
 -define(SPACE, 16#20).
@@ -18,6 +21,7 @@
 -define(BACKSLASH, $\\).
 -define(PATTERN_DIR, "./config/patterns/").
 -define(PATTERN_FILE, "./config/syslog_patterns").
+-define(LIMIT, 1000).
 
 %%====================================================================
 %% API and Callbacks
@@ -28,7 +32,7 @@ start_link() ->
 
 %%--------------------------------------------------------------------
 grok(Msg) -> 
-    io:format("grok message ~p~n", [Msg]),
+    %io:format("grok message ~p~n", [Msg]),
     gen_server:cast(?SERVER, {grok, Msg}).
 
 %%--------------------------------------------------------------------
@@ -40,8 +44,8 @@ init(_) ->
 
     % Pro zpracovani zprav se ale nehleda dle klicu ale iteruje se po vzorech, vhodnejsi je seznam
     CompPatterns = maps:to_list(maps:map(fun(_Key, Val) -> compile_pattern(Val) end, ExpPatterns)),
-    io:format("CompPatterns: ~p~n", [CompPatterns]),
-    {ok, #state{patterns = CompPatterns}}.
+    %io:format("CompPatterns: ~p~n", [CompPatterns]),
+    {ok, #state{patterns = CompPatterns, start_time = erlang:timestamp(), count = 0}}.
 
 %%--------------------------------------------------------------------
 code_change(_OlvVsn, State, _Extra) ->
@@ -53,11 +57,21 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
-handle_cast({grok, Msg}, #state{patterns = Patterns} = State) ->
-    io:format("handle_cast: ~p~n", [Msg]),
-    Data = match(Msg, Patterns),
-    io:format("Data: ~p~n", [Data]),
-    {noreply, State}; 
+handle_cast({grok, Msg}, #state{patterns = Patterns, start_time = StartTime, count = Count} = State) ->
+    %io:format("handle_cast: ~p~n", [Msg]),
+    _Data = match(Msg, Patterns),
+    %io:format("Data: ~p~n", [Data]),
+
+    NewCount = Count + 1, 
+    case NewCount =:= ?LIMIT of
+        true ->
+            Seconds = timer:now_diff(erlang:timestamp(), StartTime) / 1000000,
+            Rate = ?LIMIT / Seconds,
+            io:format("~p > current rate: ~p~n", [erlang:timestamp(), Rate]),
+            {noreply, State#state{start_time = erlang:timestamp(), count = 0}}; 
+        false ->
+            {noreply, State#state{count = NewCount}}
+    end;  
 
 handle_cast(Request, State) ->
     io:format("handle_cast - unknown request: ~p~n", [Request]),
@@ -79,7 +93,7 @@ match(_Msg, []) ->
     nomatch;
 
 match(Msg, [{Name, RE}|T]) ->
-    io:format("match - H: ~p~n", [RE]),
+    %io:format("match - H: ~p~n", [RE]),
     case re:run(Msg, RE, [global, {capture, all_names, list}]) of
         {match, Captured} ->
             {Name, Captured};
@@ -243,4 +257,9 @@ process_line(Line) ->
             end
     end.
 
+%%====================================================================
+%% Tests
 
+rate_test() ->
+    grok("gary is male, 25 years old and weighs 68.5 kilograms"),
+    rate_test().
