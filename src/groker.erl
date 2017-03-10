@@ -43,7 +43,6 @@ init(_) ->
     CorePatterns = load_patterns_from_dir(?PATTERN_DIR),
     AppPatterns = load_patterns_from_file(?PATTERN_FILE),
     Metadata = extract_metadata(AppPatterns),
-    io:format("Metadata: ~p~n", [Metadata]),
     ExpPatterns = maps:map(fun(_Key, Val) -> expand_pattern(Val, CorePatterns) end, AppPatterns),
 
     % Pro zpracovani zprav se ale nehleda dle klicu ale iteruje se po vzorech, vhodnejsi je seznam
@@ -66,10 +65,10 @@ handle_call(_Request, _From, State) ->
 handle_cast({grok, Msg}, #state{patterns = Patterns, metadata = Metadata, start_time = StartTime, count = Count} = State) ->
     case match(Msg, Patterns) of
         nomatch ->
-            io:format("No match~n", []);
+            nomatch;
         {PatternName, Data} ->
-            Output = create_output(PatternName, Data, Metadata),
-            io:format("Data: ~p~n", [Output])
+            Output = create_output(PatternName, Data, Metadata)
+            %io:format("Data: ~p~n", [Output])
     end,
 
     NewCount = Count + 1,
@@ -84,8 +83,8 @@ handle_cast({grok, Msg}, #state{patterns = Patterns, metadata = Metadata, start_
             {noreply, State#state{count = NewCount}}
     end;  
 
-handle_cast(Request, State) ->
-    io:format("handle_cast - unknown request: ~p~n", [Request]),
+handle_cast(_Request, State) ->
+    % Uknown request. Don't bother.
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -106,7 +105,6 @@ match(_Msg, []) ->
 match(Msg, [{Name, RE}|T]) ->
     case re:run(Msg, RE, [global, {capture, all_but_first, list}]) of
         {match, [Captured|_]} ->
-            io:format("Captured: ~p~n", [Captured]),
             {Name, Captured};
         nomatch ->
             match(Msg, T)
@@ -155,12 +153,12 @@ extract_metadata([{Name, Pattern}|Patterns], Metadata) ->
 %%--------------------------------------------------------------------
 extract_names(Pattern) ->
     {match, Captured} = re:run(Pattern, "%{(\\w+):(\\w+)(?::\\w+)?}", [ungreedy, global, {capture,all_but_first,list}]),
-    lists:map(fun([_V, K | _]) -> {K, undefined} end, Captured).
+    lists:map(fun([_V, K | _]) -> {list_to_atom(K), undefined} end, Captured).
 
 %%--------------------------------------------------------------------
 extract_types(Pattern) ->
     {match, Captured} = re:run(Pattern, "%{(\\w+):(\\w+):(\\w+)}", [ungreedy, global, {capture,all_but_first,list}]),
-    lists:map(fun([_V, K, T | _]) -> {K, list_to_atom(T)} end, Captured).
+    lists:map(fun([_V, K, T | _]) -> {list_to_atom(K), list_to_atom(T)} end, Captured).
 
 %%--------------------------------------------------------------------
 merge_names_types(Names, Types) ->
