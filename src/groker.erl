@@ -11,9 +11,9 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% Tests
--export([test1/0, test2/0]).
+-export([test1/0, test2/0, test3/0]).
 
--record(state, {patterns, start_time, count}).
+-record(state, {patterns, metadata, start_time, count}).
 
 -define(SERVER, ?MODULE).
 -define(SPACE, 16#20).
@@ -32,7 +32,6 @@ start_link() ->
 
 %%--------------------------------------------------------------------
 grok(Msg) -> 
-    %io:format("grok message ~p~n", [Msg]),
     gen_server:cast(?SERVER, {grok, Msg}).
 
 get_pid() ->
@@ -43,12 +42,13 @@ init(_) ->
     % U expanze vyrazu se pouziva hledani dle klicu, vhodna struktura je mapa
     CorePatterns = load_patterns_from_dir(?PATTERN_DIR),
     AppPatterns = load_patterns_from_file(?PATTERN_FILE),
+    Metadata = extract_metadata(AppPatterns),
+    io:format("Metadata: ~p~n", [Metadata]),
     ExpPatterns = maps:map(fun(_Key, Val) -> expand_pattern(Val, CorePatterns) end, AppPatterns),
 
     % Pro zpracovani zprav se ale nehleda dle klicu ale iteruje se po vzorech, vhodnejsi je seznam
     CompPatterns = maps:to_list(maps:map(fun(_Key, Val) -> compile_pattern(Val) end, ExpPatterns)),
-    %io:format("CompPatterns: ~p~n", [CompPatterns]),
-    {ok, #state{patterns = CompPatterns, start_time = erlang:timestamp(), count = 0}}.
+    {ok, #state{patterns = CompPatterns, metadata = Metadata, start_time = erlang:timestamp(), count = 0}}.
 
 %%--------------------------------------------------------------------
 code_change(_OlvVsn, State, _Extra) ->
@@ -63,19 +63,22 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
-handle_cast({grok, Msg}, #state{patterns = Patterns, start_time = StartTime, count = Count} = State) ->
-    %io:format("handle_cast: ~p~n", [Msg]),
-    _Data = match(Msg, Patterns),
-    %io:format("Data: ~p~n", [Data]),
+handle_cast({grok, Msg}, #state{patterns = Patterns, metadata = Metadata, start_time = StartTime, count = Count} = State) ->
+    case match(Msg, Patterns) of
+        nomatch ->
+            io:format("No match~n", []);
+        {PatternName, Data} ->
+            Output = create_output(PatternName, Data, Metadata),
+            io:format("Data: ~p~n", [Output])
+    end,
 
-    NewCount = Count + 1, 
+    NewCount = Count + 1,
     case NewCount =:= ?LIMIT of
         true ->
             {message_queue_len, BoxLen} = process_info(self(), message_queue_len),
             Seconds = timer:now_diff(erlang:timestamp(), StartTime) / 1000000,
             Rate = ?LIMIT / Seconds,
             io:format("rate: ~p, box len: :~p~n", [Rate, BoxLen]),
-            %io:format("~p~n", [Rate]),
             {noreply, State#state{start_time = erlang:timestamp(), count = 0}}; 
         false ->
             {noreply, State#state{count = NewCount}}
@@ -101,13 +104,33 @@ match(_Msg, []) ->
     nomatch;
 
 match(Msg, [{Name, RE}|T]) ->
-    %io:format("match - H: ~p~n", [RE]),
-    case re:run(Msg, RE, [global, {capture, all_names, list}]) of
-        {match, Captured} ->
+    case re:run(Msg, RE, [global, {capture, all_but_first, list}]) of
+        {match, [Captured|_]} ->
+            io:format("Captured: ~p~n", [Captured]),
             {Name, Captured};
         nomatch ->
             match(Msg, T)
     end.
+
+%%--------------------------------------------------------------------
+create_output(PatternName, Data, Metadata) ->
+    create_output1(Data, maps:get(PatternName, Metadata), #{}).
+
+create_output1([], [], Output) ->
+    Output;
+
+create_output1([Value|Data], [{Name, Type}|Metadata], Output) ->
+   create_output1(Data, Metadata, maps:put(Name, type(Type, Value), Output)).
+
+%%--------------------------------------------------------------------
+type(int, Val) ->
+    list_to_integer(Val);
+
+type(float, Val) ->
+    list_to_float(Val);
+
+type(_, Val) ->
+    Val.
 
 %%--------------------------------------------------------------------
 compile_pattern(P) ->
@@ -115,17 +138,58 @@ compile_pattern(P) ->
     MP.
 
 %%--------------------------------------------------------------------
+extract_metadata(Patterns) ->
+    L = maps:to_list(Patterns),
+    M = extract_metadata(L, []),
+    maps:from_list(M).
+
+extract_metadata([], Metadata) ->
+    Metadata;
+
+extract_metadata([{Name, Pattern}|Patterns], Metadata) ->
+   Names = extract_names(Pattern),
+   Types = extract_types(Pattern),
+   Merged = merge_names_types(Names, Types),
+   extract_metadata(Patterns, [{Name, Merged}|Metadata]).
+
+%%--------------------------------------------------------------------
+extract_names(Pattern) ->
+    {match, Captured} = re:run(Pattern, "%{(\\w+):(\\w+)(?::\\w+)?}", [ungreedy, global, {capture,all_but_first,list}]),
+    lists:map(fun([_V, K | _]) -> {K, undefined} end, Captured).
+
+%%--------------------------------------------------------------------
+extract_types(Pattern) ->
+    {match, Captured} = re:run(Pattern, "%{(\\w+):(\\w+):(\\w+)}", [ungreedy, global, {capture,all_but_first,list}]),
+    lists:map(fun([_V, K, T | _]) -> {K, list_to_atom(T)} end, Captured).
+
+%%--------------------------------------------------------------------
+merge_names_types(Names, Types) ->
+    merge_names_types(Names, Types, []).
+
+merge_names_types([], _, Merged) ->
+    lists:reverse(Merged);
+
+merge_names_types([{Name, Type}|Names], Types, Merged) ->
+    T = case get_type(Name, Types) of 
+            undefined ->
+                Type;
+            Tp ->
+                Tp
+        end,
+    merge_names_types(Names, Types, [{Name, T}|Merged]).
+
+%%--------------------------------------------------------------------
+get_type(_, []) ->
+    undefined;
+
+get_type(Name, [{Name, Type}|_]) ->
+    Type;
+
+get_type(Name, [_|Types]) ->
+    get_type(Name, Types).
+
+%%--------------------------------------------------------------------
 expand_pattern(Pattern, Patterns) ->
-    expand_pattern(Pattern, Patterns, #{}).
-
-expand_pattern(Pattern, Patterns, DataTypes) ->
-    NewTypes = case re:run(Pattern, "%{(\\w+):(\\w+):(\\w+)}", [ungreedy, global, {capture,all_but_first,list}]) of
-                   {match, Types} ->
-                       maps:merge(DataTypes, extract_types(Types));
-                   nomatch ->
-                       DataTypes
-               end,
-
     %io:format("Entering high level expansion with ~p~n", [Pattern]),
     Pattern1 = expand_high_level(Pattern, Patterns),
 
@@ -136,7 +200,7 @@ expand_pattern(Pattern, Patterns, DataTypes) ->
         nomatch ->
             Pattern2;
         {match, _} ->
-            expand_pattern(Pattern2, Patterns, NewTypes)
+            expand_pattern(Pattern2, Patterns)
     end.
 
 %%--------------------------------------------------------------------
@@ -181,18 +245,6 @@ escape([H|T], Rslt) ->
         false ->
             escape(T, [H | Rslt])
     end.
-
-%%--------------------------------------------------------------------
-extract_types(TypeGroups) ->
-    extract_types(TypeGroups, #{}).
-
-extract_types([], Types) ->
-    Types;
-
-extract_types([TypeGroup|TypeGroups], Types) ->
-    [_, Name, Type|_] = TypeGroup,
-    NewTypes = maps:put(Name, Type, Types),
-    extract_types(TypeGroups, NewTypes).
 
 %%--------------------------------------------------------------------
 load_patterns_from_dir(Dir) ->
@@ -268,34 +320,40 @@ process_line(Line) ->
 %%====================================================================
 %% Tests
 
+%%--------------------------------------------------------------------
 test1() ->
-    Pid = get_pid(),
-    test1(Pid).
+    grok("gary is male, 25 years old and weighs 68.5 kilograms").
 
-test1(Pid) ->
+%%--------------------------------------------------------------------
+test2() ->
+    Pid = get_pid(),
+    test2(Pid).
+
+test2(Pid) ->
     {message_queue_len, BoxLen} = process_info(Pid, message_queue_len),
 
     case BoxLen > 2000000 of
         true ->
             io:format("!~n"),
-            test1(Pid);
+            test2(Pid);
         false ->
             grok("gary is male, 25 years old and weighs 68.5 kilograms"),
-            test1(Pid)
+            test2(Pid)
     end.
 
-test2() ->
-    test2(0).
+%%--------------------------------------------------------------------
+test3() ->
+    test3(0).
 
-test2(Cnt) ->
-    %% Test 2 ma horsi vysleky nez test 1. Zda se, ze je pro celkovy vykon lepsi
+test3(Cnt) ->
+    %% Test 3 ma horsi vysleky nez test 2. Zda se, ze je pro celkovy vykon lepsi
     %% kontinualne plnit mailbox nez ho precpat na zacatku a nechat byt
     grok("gary is male, 25 years old and weighs 68.5 kilograms"),
     case Cnt > 300000 of
         true ->
             io:format("Fin~n", []);
         false ->
-            test2(Cnt + 1)
+            test3(Cnt + 1)
     end.
 
  
