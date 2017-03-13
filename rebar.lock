@@ -1,1 +1,4 @@
-[].
+[{<<"groklib">>,
+  {git,"https://github.com/altworx/groklib.git",
+       {ref,"52bcdee63e941e81bd3f842de4f8def59bd50fc8"}},
+  0}].
