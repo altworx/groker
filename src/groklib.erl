@@ -6,6 +6,19 @@
 -define(HASH, $#).
 -define(BACKSLASH, $\\).
 
+%%====================================================================
+%% API functions
+
+%%--------------------------------------------------------------------
+%% Returns list of compiled app patterns with their names and metadata
+%%
+get_patterns(CorePatternDir, AppPatternFile) ->
+    CorePatterns = load_patterns_from_dir(CorePatternDir),
+    AppPatterns = load_patterns_from_file(AppPatternFile),
+    Metadata = extract_metadata(AppPatterns),
+    ExpandedPatterns = maps:map(fun(Key, Val) -> {maps:get(Key, Metadata), expand_pattern(Val, CorePatterns)} end, AppPatterns),
+    maps:map(fun(_Key, {PatternMetadata, ExpandedPattern}) -> {PatternMetadata, compile_pattern(ExpandedPattern)} end, ExpandedPatterns).
+
 %%--------------------------------------------------------------------
 %% Receives text to match and list of compiled patterns.
 %% Returns either nomatch or tuple containing name of ther pattern 
@@ -24,58 +37,11 @@ match(Text, [{Name, {Metadata, CompiledPattern}}|T]) ->
             match(Text, T)
     end.
 
-%%--------------------------------------------------------------------
-%% Returns list of compiled app patterns with their names and metadata
-%%
-get_patterns(CorePatternDir, AppPatternFile) ->
-    CorePatterns = load_patterns_from_dir(CorePatternDir),
-    AppPatterns = load_patterns_from_file(AppPatternFile),
-    Metadata = extract_metadata(AppPatterns),
-    ExpandedPatterns = maps:map(fun(Key, Val) -> {maps:get(Key, Metadata), expand_pattern(Val, CorePatterns)} end, AppPatterns),
-    maps:map(fun(_Key, {PatternMetadata, ExpandedPattern}) -> {PatternMetadata, compile_pattern(ExpandedPattern)} end, ExpandedPatterns).
+%%====================================================================
+%% Private functions
 
-%%--------------------------------------------------------------------
-expand_pattern(Pattern, Patterns) ->
-    %io:format("Entering high level expansion with ~p~n", [Pattern]),
-    Pattern1 = expand_high_level(Pattern, Patterns),
-
-    %io:format("Entering low level expansion with: ~p~n", [Pattern1]),
-    Pattern2 = expand_low_level(Pattern1, Patterns),
-
-    case re:run(Pattern2, "%{\\w+(:\\w+)?}", [ungreedy]) of 
-        nomatch ->
-            Pattern2;
-        {match, _} ->
-            expand_pattern(Pattern2, Patterns)
-    end.
-
-%%--------------------------------------------------------------------
-expand_high_level(Pattern, Patterns) ->
-    case re:run(Pattern, "%{(\\w+):(\\w+)(?::\\w+)?}", [ungreedy, {capture, all, list}]) of
-        nomatch -> 
-            Pattern;
-        {match, [String, Type, Name|_]} ->
-            Replacement = maps:get(Type, Patterns),
-            Replacement1 = escape("(?P<" ++ Name ++ ">" ++ Replacement ++ ")"),
-            %io:format("~p -> ~p~n", [Type, Replacement1]),
-            NewPattern = re:replace(Pattern, String, Replacement1, [ungreedy, {return, list}]),
-            %io:format("~p~n", [NewPattern]),
-            expand_high_level(NewPattern, Patterns)
-    end.
-
-%%--------------------------------------------------------------------
-expand_low_level(Pattern, Patterns) ->
-     case re:run(Pattern, "%{(\\w+)}", [ungreedy, {capture, all, list}]) of
-        nomatch -> 
-            Pattern;
-        {match, [String, Type|_]} ->
-            Replacement = maps:get(Type, Patterns),
-            Replacement1 = escape(Replacement),
-            %io:format("~p -> ~p~n", [Type, Replacement1]),
-            NewPattern = re:replace(Pattern, String, Replacement1, [ungreedy, {return, list}]),
-            %io:format("~p~n", [NewPattern]),
-            expand_low_level(NewPattern, Patterns)
-    end.
+%%====================================================================
+%% Utility functions for loading patterns from files
 
 %%--------------------------------------------------------------------
 load_patterns_from_dir(Dir) ->
@@ -148,30 +114,74 @@ process_line(Line) ->
             end
     end.
 
-%%--------------------------------------------------------------------
-convert_types(Data, Metadata) ->
-    convert_types(Data, Metadata, #{}).
-
-convert_types([], [], Result) ->
-    Result;
-
-convert_types([Value|Data], [{Name, Type}|Metadata], Result) ->
-   convert_types(Data, Metadata, maps:put(Name, convert_type(Type, Value), Result)).
+%%====================================================================
+%% Utility functions for pattern expansion and compilation
 
 %%--------------------------------------------------------------------
-convert_type(int, Val) ->
-    list_to_integer(Val);
+expand_pattern(Pattern, Patterns) ->
+    %io:format("Entering high level expansion with ~p~n", [Pattern]),
+    Pattern1 = expand_high_level(Pattern, Patterns),
 
-convert_type(float, Val) ->
-    list_to_float(Val);
+    %io:format("Entering low level expansion with: ~p~n", [Pattern1]),
+    Pattern2 = expand_low_level(Pattern1, Patterns),
 
-convert_type(_, Val) ->
-    Val.
+    case re:run(Pattern2, "%{\\w+(:\\w+)?}", [ungreedy]) of 
+        nomatch ->
+            Pattern2;
+        {match, _} ->
+            expand_pattern(Pattern2, Patterns)
+    end.
+
+%%--------------------------------------------------------------------
+expand_high_level(Pattern, Patterns) ->
+    case re:run(Pattern, "%{(\\w+):(\\w+)(?::\\w+)?}", [ungreedy, {capture, all, list}]) of
+        nomatch -> 
+            Pattern;
+        {match, [String, Type, Name|_]} ->
+            Replacement = maps:get(Type, Patterns),
+            Replacement1 = escape("(?P<" ++ Name ++ ">" ++ Replacement ++ ")"),
+            %io:format("~p -> ~p~n", [Type, Replacement1]),
+            NewPattern = re:replace(Pattern, String, Replacement1, [ungreedy, {return, list}]),
+            %io:format("~p~n", [NewPattern]),
+            expand_high_level(NewPattern, Patterns)
+    end.
+
+%%--------------------------------------------------------------------
+expand_low_level(Pattern, Patterns) ->
+     case re:run(Pattern, "%{(\\w+)}", [ungreedy, {capture, all, list}]) of
+        nomatch -> 
+            Pattern;
+        {match, [String, Type|_]} ->
+            Replacement = maps:get(Type, Patterns),
+            Replacement1 = escape(Replacement),
+            %io:format("~p -> ~p~n", [Type, Replacement1]),
+            NewPattern = re:replace(Pattern, String, Replacement1, [ungreedy, {return, list}]),
+            %io:format("~p~n", [NewPattern]),
+            expand_low_level(NewPattern, Patterns)
+    end.
 
 %%--------------------------------------------------------------------
 compile_pattern(P) ->
     {ok, MP} = re:compile(P),
     MP.
+
+%%--------------------------------------------------------------------
+escape(Str) ->
+    escape(Str, []).
+
+escape([], Rslt) ->
+    lists:reverse(Rslt);
+
+escape([H|T], Rslt) ->
+    case H =:= ?BACKSLASH of
+        true ->
+            escape(T, [H | [H | Rslt]]);
+        false ->
+            escape(T, [H | Rslt])
+    end.
+
+%%====================================================================
+%% Utility functions for meatadata extraction
 
 %%--------------------------------------------------------------------
 extract_metadata(Patterns) ->
@@ -224,18 +234,26 @@ get_type(Name, [{Name, Type}|_]) ->
 get_type(Name, [_|Types]) ->
     get_type(Name, Types).
 
+%%====================================================================
+%% Utility functions for type conversion
+
 %%--------------------------------------------------------------------
-escape(Str) ->
-    escape(Str, []).
+convert_types(Data, Metadata) ->
+    convert_types(Data, Metadata, #{}).
 
-escape([], Rslt) ->
-    lists:reverse(Rslt);
+convert_types([], [], Result) ->
+    Result;
 
-escape([H|T], Rslt) ->
-    case H =:= ?BACKSLASH of
-        true ->
-            escape(T, [H | [H | Rslt]]);
-        false ->
-            escape(T, [H | Rslt])
-    end.
+convert_types([Value|Data], [{Name, Type}|Metadata], Result) ->
+   convert_types(Data, Metadata, maps:put(Name, convert_type(Type, Value), Result)).
+
+%%--------------------------------------------------------------------
+convert_type(int, Val) ->
+    list_to_integer(Val);
+
+convert_type(float, Val) ->
+    list_to_float(Val);
+
+convert_type(_, Val) ->
+    Val.
 
