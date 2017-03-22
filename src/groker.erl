@@ -14,8 +14,10 @@
 %% Tests
 -export([match_test/0, benchmark1/0, benchmark2/0]).
 
--record(state, {patterns, start_time, count}).
+-record(state, {patterns :: #{string() => groklib:exp_pattern()}, start_time :: erlang:timastamp(), count :: non_neg_integer()}).
 
+-define(SPACE, 16#20).
+-define(HASH, $#).
 -define(SERVER, ?MODULE).
 -define(PATTERN_DIR, "./config/patterns/").
 -define(PATTERN_FILE, "./config/syslog_patterns").
@@ -40,9 +42,18 @@ get_pid() ->
 
 %%--------------------------------------------------------------------
 init(_) ->
-    Patterns = groklib:get_patterns(?PATTERN_DIR, ?PATTERN_FILE),
+    % Core patterns are those uded for expansion of app patterns. Are not expanded anc compiled
+    CorePatterns = load_patterns_from_dir(?PATTERN_DIR),
+
+    % App patterns are expanded with core patterns. They are compiled after axpansion and used for patterns matching.
+    AppPatterns = load_patterns_from_file(?PATTERN_FILE),
+
+    % Extract metadata, expand, compile
+    Patterns = maps:map(fun(_Key, Pattern) -> groklib:build_pattern(Pattern, CorePatterns) end, AppPatterns),
+    io:format("Patterns: ~p~n", [Patterns]),
+
     % Patterns is a map but message processing doesn't use keys. Instead it iterates through patterns. List is better structure.
-    {ok, #state{patterns = maps:to_list(Patterns), start_time = erlang:timestamp(), count = 0}}.
+    {ok, #state{patterns = Patterns, start_time = erlang:timestamp(), count = 0}}.
 
 %%--------------------------------------------------------------------
 code_change(_OlvVsn, State, _Extra) ->
@@ -53,7 +64,8 @@ handle_call(getpid, _From, State) ->
     {reply, self(), State};
 
 handle_call({grok, Msg}, _From,  #state{patterns = Patterns} = State) ->
-    Reply = groklib:match(Msg, Patterns),
+    {Metadata, RE} = maps:get("CSV", Patterns),
+    Reply = groklib:match(Msg, Metadata, RE),
     {reply, Reply, State};
 
 handle_call(_Request, _From, State) ->
@@ -62,7 +74,8 @@ handle_call(_Request, _From, State) ->
 
 %%--------------------------------------------------------------------
 handle_cast({grok, Msg}, #state{patterns = Patterns, start_time = StartTime, count = Count} = State) ->
-    groklib:match(Msg, Patterns),
+    {Metadata, RE} = maps:get("CSV", Patterns),
+    groklib:match(Msg, Metadata, RE),
 
     NewCount = Count + 1,
     case NewCount =:= ?LIMIT of
@@ -89,13 +102,93 @@ terminate(_Reason, _State) ->
     io:format("Terminated~n", []).
 
 %%====================================================================
+%% Private functions
+
+%%====================================================================
+%% Utility functions for loading patterns from files
+
+%%--------------------------------------------------------------------
+load_patterns_from_dir(Dir) ->
+    case file:list_dir(Dir) of
+        {ok, Files} ->
+            Paths = [lists:append(Dir, F) || F <- Files],
+            load_patterns_from_files(Paths, #{});
+        _ ->
+            #{}
+    end.
+
+%%--------------------------------------------------------------------
+load_patterns_from_files([], Patterns) ->
+    Patterns;
+
+load_patterns_from_files([Path|Paths], Patterns) ->
+    NewPatterns = maps:merge(Patterns, load_patterns_from_file(Path)),
+    load_patterns_from_files(Paths, NewPatterns).
+
+%%--------------------------------------------------------------------
+load_patterns_from_file(Path) ->
+    {ok, File} = file:open(Path, [read]),
+    process_file(File).
+
+%%--------------------------------------------------------------------
+process_file(File) ->
+    process_file(File, #{}).
+
+process_file(File, Patterns) ->
+    case file:read_line(File) of
+        eof -> 
+            Patterns;
+        {ok, Line} ->
+            Rslt = process_line(Line),
+            case Rslt of
+                nopattern ->
+                    process_file(File, Patterns);
+                {pattern, Key, Val} ->
+                    NewPatterns = maps:put(Key, Val, Patterns),
+                    process_file(File, NewPatterns)
+            end
+    end.
+
+%%--------------------------------------------------------------------
+process_line(Line) ->
+    Line1 = string:strip(Line, right, $\n),
+    Line2 = string:strip(Line1),
+    case length(Line2) of
+        0 ->
+            % Empty line
+            nopattern;
+        _ ->
+            [F| _] = Line2,
+            case F of
+                ?HASH ->
+                    % Comment
+                    nopattern;
+                _ ->
+                    % First space char separates pattern name from pattern
+                    Pos = string:chr(Line2, ?SPACE),
+                    case Pos of
+                        0 ->
+                            % Invalid line
+                            nopattern;
+                        _ ->
+                            % Valid line
+                            Key = string:substr(Line2, 1, Pos - 1),
+                            Val = string:substr(Line2, Pos + 1),
+                            {pattern, string:strip(Key), string:strip(Val)}
+                    end
+            end
+    end.
+
+%%====================================================================
 %% Tests (will be replaced by common tests)
 
 %%--------------------------------------------------------------------
 match_test() ->
-    io:format("~p~n", [syngrok("Gary is male, 25 years old and weighs 68.5 kilograms")]),
-    io:format("~p~n", [syngrok("Penny is female, 19 years old and weighs 54.0 kilograms")]),
-    io:format("~p~n", [syngrok("This message doesn't match")]).
+    %io:format("~p~n", [syngrok(message1())]),
+    %io:format("~p~n", [syngrok(message2())]),
+    %io:format("~p~n", [syngrok(message3())]),
+    io:format("~p~n", [syngrok(message4())]),
+    io:format("~p~n", [syngrok(message5())]).
 
 %%--------------------------------------------------------------------
 benchmark1() ->
@@ -110,7 +203,7 @@ benchmark1(Pid) ->
             io:format("!~n"),
             benchmark1(Pid);
         false ->
-            grok("gary is male, 25 years old and weighs 68.5 kilograms"),
+            grok(message4()),
             benchmark1(Pid)
     end.
 
@@ -119,11 +212,28 @@ benchmark2() ->
     benchmark2(0).
 
 benchmark2(Cnt) ->
-    grok("gary is male, 25 years old and weighs 68.5 kilograms"),
+    grok(message1()),
     case Cnt > 300000 of
         true ->
             io:format("Fin~n", []);
         false ->
             benchmark2(Cnt + 1)
     end.
+
+%%--------------------------------------------------------------------
+message1() ->
+    "Gary is male, 25 years old and weighs 68.5 kilograms".
+
+message2() ->
+    "Penny is female, 19 years old and weighs 54.0 kilograms".
+
+message3() ->
+    "This message doesn't match".
+
+message4() ->
+    "Mar 17 16:52:03 td2 180768781,,,,,1,,,win_sec-4768-ux-success,ntto209,,1489258562,Undefined,,,,,,,,,,,,,,,,auth.aaa.login.grant,,zu002676,25,,,10.198.80.86,,,58326,,o2.srv.nt.prod,,,,,,,,,Undefined,,,,,20170317-150755921".
+
+message5() ->
+    "Mar 17 16:52:03 td2 180768781,,,,,1,,,win_sec-4768-ux-success,ntto209,,1489258562,Undefined,,,,,,,,,,,,,,,,auth.aaa.login.deny,,zu002676,25,,,10.198.80.86,,,58326,,o2.srv.nt.prod,,,,,,,,,Undefined,,,,,20170317-150755921".
+
 
