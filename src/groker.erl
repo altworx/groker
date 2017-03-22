@@ -31,12 +31,18 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 %%--------------------------------------------------------------------
+-spec grok(Msg :: string()) -> ok.
+
 grok(Msg) -> 
     gen_server:cast(?SERVER, {grok, Msg}).
 
+%%--------------------------------------------------------------------
+-spec syngrok(Msg :: string()) -> #{atom() => term()}.
 syngrok(Msg) ->
     gen_server:call(?SERVER, {grok, Msg}).
 
+%%--------------------------------------------------------------------
+-spec get_pid() -> pid().
 get_pid() ->
     gen_server:call(?SERVER, getpid).
 
@@ -50,7 +56,6 @@ init(_) ->
 
     % Extract metadata, expand, compile
     Patterns = maps:map(fun(_Key, Pattern) -> groklib:build_pattern(Pattern, CorePatterns) end, AppPatterns),
-    io:format("Patterns: ~p~n", [Patterns]),
 
     % Patterns is a map but message processing doesn't use keys. Instead it iterates through patterns. List is better structure.
     {ok, #state{patterns = Patterns, start_time = erlang:timestamp(), count = 0}}.
@@ -184,9 +189,9 @@ process_line(Line) ->
 
 %%--------------------------------------------------------------------
 match_test() ->
-    %io:format("~p~n", [syngrok(message1())]),
-    %io:format("~p~n", [syngrok(message2())]),
-    %io:format("~p~n", [syngrok(message3())]),
+    io:format("~p~n", [syngrok(message1())]),
+    io:format("~p~n", [syngrok(message2())]),
+    io:format("~p~n", [syngrok(message3())]),
     io:format("~p~n", [syngrok(message4())]),
     io:format("~p~n", [syngrok(message5())]).
 
