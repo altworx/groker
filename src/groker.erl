@@ -38,11 +38,13 @@ grok(Msg) ->
 
 %%--------------------------------------------------------------------
 -spec syngrok(Msg :: string()) -> #{atom() => term()}.
+
 syngrok(Msg) ->
     gen_server:call(?SERVER, {grok, Msg}).
 
 %%--------------------------------------------------------------------
 -spec get_pid() -> pid().
+
 get_pid() ->
     gen_server:call(?SERVER, getpid).
 
@@ -57,7 +59,6 @@ init(_) ->
     % Extract metadata, expand, compile
     Patterns = maps:map(fun(_Key, Pattern) -> groklib:build_pattern(Pattern, CorePatterns) end, AppPatterns),
 
-    % Patterns is a map but message processing doesn't use keys. Instead it iterates through patterns. List is better structure.
     {ok, #state{patterns = Patterns, start_time = erlang:timestamp(), count = 0}}.
 
 %%--------------------------------------------------------------------
@@ -69,7 +70,7 @@ handle_call(getpid, _From, State) ->
     {reply, self(), State};
 
 handle_call({grok, Msg}, _From,  #state{patterns = Patterns} = State) ->
-    {Metadata, RE} = maps:get("CSV", Patterns),
+    {Metadata, RE} = maps:get("PATTERN1", Patterns),
     Reply = groklib:match(Msg, Metadata, RE),
     {reply, Reply, State};
 
@@ -79,7 +80,7 @@ handle_call(_Request, _From, State) ->
 
 %%--------------------------------------------------------------------
 handle_cast({grok, Msg}, #state{patterns = Patterns, start_time = StartTime, count = Count} = State) ->
-    {Metadata, RE} = maps:get("CSV", Patterns),
+    {Metadata, RE} = maps:get("PATTERN1", Patterns),
     groklib:match(Msg, Metadata, RE),
 
     NewCount = Count + 1,
