@@ -6,6 +6,7 @@ Erlang implementation of grok pattern matching. Heavily inspired by pygrok (http
 # Sample Usage #
 Now all the functionality is in the sigle module:
 
+```erlang
 $ erl
 c(groker).
 Pattern = "%{WORD:name} is %{WORD:gender}, %{NUMBER:age:int} years old and weighs %{NUMBER:weight:float} kilograms".
@@ -17,4 +18,4 @@ re:run(Text, CRE, [global, {capture, all, list}]).
          "gary","male","25","25","68.5","68.5"]]}
 
 I'll pack it into OTP app next time.
-
+```
